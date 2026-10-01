@@ -2,6 +2,14 @@
 CSC 2114 Artificial Intelligence - Practical 1
 Makerere Campus Route Finder (BFS and DFS)
 
+Group 10 (BSSE)
+    1. NOMWESIGWA KEITH     23/U/16071/EVE
+    2. WAMBUI MARIAM        23/U/18494/PS
+    3. LUKAANYA GEORGE      23/U/0696
+    4. MUSHEIJA ABRAHAM     23/U/12139/EVE
+    5. NALUYANGE KEVIN      18/U/23394/EVE
+    6. NABIRYE ANITAH       23/U/12826/EVE
+
 Uninformed search over a simplified model of the Makerere main campus.
 Every connection costs 1 hop, so the optimal route is the one with the
 fewest hops. Python 3 standard library only.

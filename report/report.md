@@ -2,15 +2,15 @@
 
 ## Makerere Campus Route Finder (DFS and BFS)
 
-**Group members**
+**Group 10 (BSSE): Group members**
 
-| # | Full name | Reg. number | Student number | # | Full name | Reg. number | Student number |
-|---|---|---|---|---|---|---|---|
-| 1 | [MEMBER 1 NAME] | [REG NO] | [STUDENT NO] | 4 | [MEMBER 4 NAME] | [REG NO] | [STUDENT NO] |
-| 2 | [MEMBER 2 NAME] | [REG NO] | [STUDENT NO] | 5 | [MEMBER 5 NAME] | [REG NO] | [STUDENT NO] |
-| 3 | [MEMBER 3 NAME] | [REG NO] | [STUDENT NO] | 6 | [MEMBER 6 NAME] | [REG NO] | [STUDENT NO] |
+| # | Full name | Reg. number | # | Full name | Reg. number |
+|---|---|---|---|---|---|
+| 1 | NOMWESIGWA KEITH | 23/U/16071/EVE | 4 | MUSHEIJA ABRAHAM | 23/U/12139/EVE |
+| 2 | WAMBUI MARIAM | 23/U/18494/PS | 5 | NALUYANGE KEVIN | 18/U/23394/EVE |
+| 3 | LUKAANYA GEORGE | 23/U/0696 | 6 | NABIRYE ANITAH | 23/U/12826/EVE |
 
-**Date:** [DD/MM/YYYY] | **Code:** [STUDENT NO]_route_finder.py (Python 3, standard library only)
+**Code:** route_finder.py (Python 3, standard library only)
 
 ## 1. Problem formulation (Part A)
 

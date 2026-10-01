@@ -1,2 +1,16 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+
+# Submission bundle (built from the tracked files)
+GROUP_10/
+GROUP_10.zip
+.dist/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
