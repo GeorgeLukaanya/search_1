@@ -1,6 +1,6 @@
 # CSC 2114 Artificial Intelligence: Assignment 1
 
-## Makerere Campus Route Finder (DFS and BFS)
+## Makerere Campus Route Finder (DFS, BFS and UCS)
 
 **Group 10 (BSSE): Group members**
 
@@ -22,6 +22,8 @@ The state space S is the set of the 18 places in the campus graph: 14 schools an
 4. **Goal test** (a Boolean test on a state): IsGoal(s) is true if and only if s = the destination place.
 5. **Path cost** (a function from paths to numbers): the sum of the step costs, where every step cost is c(s, Go(n), n) = 1. The cost of a route is therefore its number of hops. The step cost is 1 because the model deliberately ignores physical distance. We only care about how many connections are walked, and every connection counts the same, so the optimal route is the one with the fewest hops.
 
+**Weighted path cost for UCS (assignment update).** For Uniform-Cost Search, each connection carries a positive step cost, c(s, Go(n), n) = w(s, n), which is the approximate walking time in minutes stored with the edge in EDGES. The path cost is the sum of these weights, and the optimal route is the one with the lowest total time. The other four components do not change. The weights are illustrative values, not measured times.
+
 **Abstraction.** The state ignores (1) the actual walking distance and time between places, (2) slope, since Makerere sits on a hill and some walks are steep, and (3) weather and crowds, for example rain or students moving between lectures. Dropping these is valid because they do not change which places are connected, so any route the agent finds is still a real walkable route. It is useful because the state shrinks to a single place name, which keeps the state space at 18 states and makes the search simple and fast.
 
 **State versus node.** In the tree-like DFS run from School of Law (Section 2.4), the state Central Teaching Facility appears in the node Law → Freedom Square → CTF (path cost 2) and again in the node Law → Freedom Square → CTF → CoCIS → CTF (path cost 4). The state is the same, but the parent and path cost are different, so these are two different nodes.
@@ -30,14 +32,15 @@ The state space S is the set of the 18 places in the campus graph: 14 schools an
 
 ### 2.1 Node, reached and frontier
 
-- **Node.** A `Node` has the four fields from the lecture: `state` (a place name), `parent` (the node it was generated from, or None for the root), `action` (the place walked to) and `path_cost` (hops from the source). The function `solution(node)` follows the `parent` pointers back to the root and reverses the list, which gives the route from source to destination.
-- **Reached table.** `reached` is a dictionary that maps a state to the node that first reached it. A child is added to the frontier only if its state is not already in `reached`, and it is recorded in `reached` at the moment it is generated. Because of this, each place enters the frontier at most once. A flag, `use_reached=False` (or `--no-reached` on the command line), turns the table off and gives tree-like search. In that mode a safety cap of 10,000 expansions stops the search.
-- **Frontier.** There is one generic `search()` function, and the strategy is passed in as the frontier class. This is the only difference between BFS and DFS:
+- **Node.** A `Node` has the four fields from the lecture: `state` (a place name), `parent` (the node it was generated from, or None for the root), `action` (the place walked to) and `path_cost` (the sum of the step costs from the source). The function `solution(node)` follows the `parent` pointers back to the root and reverses the list, which gives the route from source to destination.
+- **Reached table.** `reached` is a dictionary that maps a state to the node that first reached it. A child is added to the frontier only if its state is not already in `reached`, and it is recorded in `reached` at the moment it is generated. Because of this, each place enters the frontier at most once. UCS is the one exception: it may re-reach a state through a strictly cheaper path. In that case it overwrites the entry in `reached` and later skips the older, more expensive node when that node is popped. A flag, `use_reached=False` (or `--no-reached` on the command line), turns the table off and gives tree-like search. In that mode a safety cap of 10,000 expansions stops the search.
+- **Frontier.** There is one generic `search()` function, and the strategy is passed in as the frontier class. This is the only difference between the three algorithms:
 
 | Algorithm | Frontier | Add children | Remove from |
 |---|---|---|---|
 | BFS | queue (FIFO), `collections.deque` | append in alphabetical order | front (`popleft`) |
 | DFS | stack (LIFO), Python list | push in **reverse** alphabetical order | back (`pop`) |
+| UCS | priority queue, `heapq` keyed on (path cost, place name, insertion order) | push each child | lowest path cost (`heappop`) |
 
 DFS pushes the children in reverse alphabetical order so that the alphabetically first neighbour ends up on top of the stack and is therefore explored first.
 
@@ -50,23 +53,25 @@ function SEARCH(problem, Frontier, use_reached):
        reached ← {problem.initial: node}          (only if use_reached)
        expanded ← 0
     3. while frontier is not empty:
-    4.     node ← frontier.POP()                  (FIFO for BFS, LIFO for DFS)
+    4.     node ← frontier.POP()                  (FIFO for BFS, LIFO for DFS, cheapest for UCS)
+           if UCS and node.path_cost > reached[node.state].path_cost: skip it (stale)
            if problem.IS-GOAL(node.state): return node, expanded
            if expanded = 10,000: return failure (cap reached)
     5.     expanded ← expanded + 1
     6.     for each child in EXPAND(node), in alphabetical order:
                if use_reached:
-                   if child.state in reached: skip this child
+                   if child.state in reached and not (UCS and child is strictly cheaper):
+                       skip this child
                    reached[child.state] ← child
     7.     frontier.ADD(remaining children)
     return failure                                (prints "No route found")
 ```
 
-The goal test is applied when a node is removed from the frontier (step 4). "Nodes expanded" counts the nodes that are removed, are not the goal, and have their children generated (step 5).
+The goal test is applied when a node is removed from the frontier (step 4). For UCS this is essential: a goal node may be generated through an expensive path before a cheaper path to it has been found, but UCS removes nodes in order of cost, so the first goal it removes is the cheapest. "Nodes expanded" counts the nodes that are removed, are not the goal, and have their children generated (step 5).
 
 ### 2.3 Interface
 
-The program prompts for the source, destination and algorithm, and prints `Algorithm`, `Route`, `Cost (hops)` and `Nodes expanded` in the required format. Names are matched case-insensitively, after trimming leading and trailing spaces. An unknown place prints a message, lists the 18 valid places and asks again. An unknown algorithm asks again; neither crashes the program. If the source equals the destination, the route is one place with cost 0.
+The program prompts for the source, destination and algorithm, and prints `Algorithm`, `Route`, `Cost (hops)` and `Nodes expanded` in the required format. Names are matched case-insensitively, after trimming leading and trailing spaces. An unknown place prints a message, lists the 18 valid places and asks again. An unknown algorithm asks again; neither crashes the program. If the source equals the destination, the route is one place with cost 0. For UCS, the output also lists the cost of each leg and the `Total cost (min)`.
 
 ### 2.4 Verifying the reached table (B4)
 
@@ -78,8 +83,10 @@ We ran School of Law → Margaret Trowell School with and without `reached`:
 | DFS | **off** | **stopped at the 10,000 cap, no route returned** | – | 10,000 |
 | BFS | on | route found | 4 | 12 |
 | BFS | off | route found | 4 | 51 |
+| UCS | on | route found (20 min) | 5 | 14 |
+| UCS | off | route found (20 min) | 5 | 535 |
 
-**Why the tree-like DFS fails.** Without `reached`, DFS goes Law → Freedom Square → Central Teaching Facility → CoCIS → Central Teaching Facility → CoCIS → … for ever. Each of these two places is the alphabetically first neighbour of the other ("Central…" comes before "CoCIS…", and "CoCIS" comes before "Freedom…" and "School…"). Because DFS always explores the first child, it bounces round the cycle CTF – CoCIS and never backs up. The graph has cycles (CTF–CoCIS–Statistics and Planning, and the Main Building–Freedom Square–Main Library triangle), so in tree-like search the search tree is infinite even though there are only 18 states. **How `reached` prevents it:** CTF is recorded when it is first generated. When CoCIS is expanded, its child CTF is already in `reached` and is skipped, so DFS has to try Engineering instead. Each state can enter the frontier only once, so the search must finish after at most 18 expansions. Tree-like BFS still succeeds, because it goes level by level, but it does about 4 times the work (51 expansions against 12).
+**Why the tree-like DFS fails.** Without `reached`, DFS goes Law → Freedom Square → Central Teaching Facility → CoCIS → Central Teaching Facility → CoCIS → … for ever. Each of these two places is the alphabetically first neighbour of the other ("Central…" comes before "CoCIS…", and "CoCIS" comes before "Freedom…" and "School…"). Because DFS always explores the first child, it bounces round the cycle CTF – CoCIS and never backs up. The graph has cycles (CTF–CoCIS–Statistics and Planning, and the Main Building–Freedom Square–Main Library triangle), so in tree-like search the search tree is infinite even though there are only 18 states. **How `reached` prevents it:** CTF is recorded when it is first generated. When CoCIS is expanded, its child CTF is already in `reached` and is skipped, so DFS has to try Engineering instead. Each state can enter the frontier only once, so the search must finish after at most 18 expansions. Tree-like BFS still succeeds, because it goes level by level, but it does about 4 times the work (51 expansions against 12). Tree-like UCS also finishes on this pair, but it needs 535 expansions against 14, because without `reached` every cheap cycle is walked again and again. On longer pairs (for example School of Law → Veterinary Medicine) it hits the 10,000 cap.
 
 ## 3. Results (Part C)
 
@@ -108,6 +115,23 @@ Abbreviations used in the routes: MB = Main Building, FS = Freedom Square, ML = 
 | 19 | ENG | VET | BFS | ENG → CoCIS → CTF → FS → ML → EDU → CONAS → FT → AGR → VET | 9 | 17 |
 | 20 | ENG | VET | DFS | ENG → CoCIS → CTF → FS → MB → SS → EDU → CONAS → FT → AGR → VET | 10 | 11 |
 
+### 3.1 Uniform-Cost Search on the same ten pairs
+
+Cost is in minutes. The BFS and DFS columns give the walking time of the routes in the table above.
+
+| # | Source | Destination | UCS route | Hops | UCS (min) | BFS (min) | DFS (min) | UCS expanded |
+|---|---|---|---|---|---|---|---|---|
+| 21 | ECO | LAW | ECO → LAW | 1 | 3 | 3 | 3 | 1 |
+| 22 | CoCIS | ENG | CoCIS → ENG | 1 | 4 | 4 | 4 | 3 |
+| 23 | EDU | SS | EDU → SS | 1 | 3 | 3 | 3 | 1 |
+| 24 | LAW | MT | LAW → ECO → SSP → CoCIS → ENG → MT | 5 | **20** | 22 | 21 | 14 |
+| 25 | CoCIS | SBE | CoCIS → ENG → SBE | 2 | 6 | 6 | 27 | 4 |
+| 26 | EDU | VET | EDU → CONAS → FT → AGR → VET | 4 | 21 | 21 | 21 | 17 |
+| 27 | CONAS | ENG | CONAS → EDU → ML → FS → CTF → CoCIS → ENG | 6 | 24 | 24 | 24 | 15 |
+| 28 | AGR | LPA | AGR → FT → CONAS → EDU → SS → MB → LPA | 6 | 28 | 28 | 46 | 12 |
+| 29 | LAW | VET | LAW → FS → ML → EDU → CONAS → FT → AGR → VET | 7 | 33 | 33 | 36 | 17 |
+| 30 | ENG | VET | ENG → CoCIS → CTF → FS → ML → EDU → CONAS → FT → AGR → VET | 9 | 39 | 39 | 42 | 17 |
+
 **Part C conditions.** BFS and DFS return different routes on five pairs (rows 7–10 and 15–20). Three pairs are directly connected schools (rows 1–6). Four pairs are at least six hops apart (rows 13–20, from 6 to 9 hops).
 
 ## 4. Analysis
@@ -122,8 +146,8 @@ Abbreviations used in the routes: MB = Main Building, FS = Freedom Square, ML = 
 
 **Memory trade-off.** BFS has to keep a whole level of the search tree in the frontier, so its memory grows as O(b^d), where b is the branching factor and d is the depth of the goal. In this graph, the frontier grows at the high-degree hubs (Main Building, Freedom Square and Main Library each have 4 neighbours) and at the cycles, which without `reached` put the same places into the frontier again and again. With `reached` the graph is so small that the BFS frontier never holds more than 7 nodes, for any pair of places. But tree-like BFS from ENG to VET (9 hops) expanded 9,043 nodes and had **18,435 nodes in its frontier at once**, while DFS's frontier only grows as O(b·m), one path plus its siblings. Each expansion takes constant time, but every generated node must be **stored** until it is expanded. On a large graph, BFS therefore runs out of memory long before the running time becomes a problem. That is why the lecture says memory, not time, limits BFS in practice.
 
-**Limitation of the equal-cost assumption.** Counting hops treats a short walk across the central landmarks the same as a long walk out to the schools at the edge of the campus. A route with fewer hops can therefore be longer in metres. For example, on LAW → VET (row 17), BFS's 7-hop route through Main Library might be a longer walk than an 8-hop route if those connections are short. With real walking distances as edge costs, BFS would no longer be optimal, because its optimality depends on equal step costs. We would use **Uniform-Cost Search** (best-first search with f(n) = g(n), the path cost so far), which always expands the cheapest node first and is optimal for positive step costs.
+**Limitation of the equal-cost assumption, and Uniform-Cost Search.** Counting hops treats a short walk across the central landmarks the same as a long walk out to the schools at the edge of the campus, so a route with fewer hops can take longer to walk. Once edges carry walking times, BFS is no longer optimal, because its optimality depends on equal step costs. We implemented **Uniform-Cost Search** (best-first search with f(n) = g(n), the path cost so far). It always expands the cheapest frontier node first and is optimal for positive step costs. The results in Section 3.1 show the difference. On **LAW → MT** (row 24), BFS's 4-hop route through Freedom Square and Main Building takes 22 minutes, but UCS finds a 5-hop route through Economics and Statistics and Planning that takes 20 minutes: more hops, less time. Across all 324 source and destination pairs, BFS's fewest-hops route costs more than the UCS route on 48 pairs. UCS never returned a more expensive route than BFS or DFS. The price is effort: UCS expanded 101 nodes over the ten pairs (BFS 100, DFS 106), because it explores outwards in rings of equal cost instead of rings of equal depth. On AGR → LPA (row 28), UCS returns a different 6-hop route from BFS (through Social Sciences instead of Main Library), but both take 28 minutes. Ties like this are broken by our deterministic ordering.
 
 ## 5. Reflection
 
-We would give every connection its real walking distance in metres, taken from a campus map. Hop counts treat a short crossing of Freedom Square the same as a long walk down the hill to the Agricultural and Veterinary schools, so real distances would make the recommended routes match what a visitor would actually walk.
+The UCS edge weights in our model are illustrative. We would replace them with real walking times or distances measured from a campus map. Measured values would capture things such as the long walk down the hill to the Agricultural and Veterinary schools, so UCS would recommend the routes a visitor would actually take.
