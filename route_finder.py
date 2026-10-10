@@ -1,6 +1,6 @@
 """
 CSC 2114 Artificial Intelligence - Practical 1
-Makerere Campus Route Finder (BFS and DFS)
+Makerere Campus Route Finder (BFS, DFS and UCS)
 
 Group 10 (BSSE)
     1. NOMWESIGWA KEITH     23/U/16071/EVE
@@ -10,22 +10,33 @@ Group 10 (BSSE)
     5. NALUYANGE KEVIN      18/U/23394/EVE
     6. NABIRYE ANITAH       23/U/12826/EVE
 
-Uninformed search over a simplified model of the Makerere main campus.
-Every connection costs 1 hop, so the optimal route is the one with the
-fewest hops. Python 3 standard library only.
+Search over a simplified model of the Makerere main campus. Every
+connection now carries a cost (approximate walking time in minutes).
+
+  BFS - fewest hops (ignores costs, so it is NOT guaranteed cheapest)
+  DFS - first route found going deep (ignores costs)
+  UCS - uniform cost search: always expands the cheapest frontier node,
+        so the route it returns has the lowest total cost.
+
+Every result reports the number of hops; UCS also reports the total cost.
+Python 3 standard library only.
 
 Usage:
     python3 route_finder.py                 # interactive prompts
     python3 route_finder.py --no-reached    # tree-like search (no reached table)
     python3 route_finder.py -s "School of Law" -d "CoCIS" -a DFS
+    python3 route_finder.py -s "School of Law" -d "CoCIS" -a UCS
 """
 
 import argparse
+import heapq
+import itertools
 from collections import deque
 
 
 # ---------------------------------------------------------------------------
-# The campus graph (given - do not change)
+# The campus graph: (place A, place B, cost in minutes)
+# NOTE: the costs are illustrative walking times. 
 # ---------------------------------------------------------------------------
 
 LANDMARKS = {
@@ -34,47 +45,57 @@ LANDMARKS = {
 }
 
 EDGES = [
-    ("Main Building", "Freedom Square"), ("Main Building", "Main Library"),
-    ("Main Building", "School of Social Sciences"),
-    ("Main Building", "School of Liberal and Performing Arts"),
-    ("Freedom Square", "Main Library"), ("Freedom Square", "School of Law"),
-    ("Freedom Square", "Central Teaching Facility"),
-    ("Main Library", "School of Education"), ("Main Library", "School of Economics"),
-    ("Central Teaching Facility", "CoCIS"),
-    ("Central Teaching Facility", "School of Statistics and Planning"),
-    ("CoCIS", "School of Statistics and Planning"), ("CoCIS", "School of Engineering"),
-    ("School of Engineering", "School of the Built Environment"),
-    ("School of Engineering", "Margaret Trowell School of Industrial and Fine Art"),
-    ("School of the Built Environment", "Margaret Trowell School of Industrial and Fine Art"),
-    ("Margaret Trowell School of Industrial and Fine Art", "School of Liberal and Performing Arts"),
-    ("School of Education", "School of Social Sciences"),
-    ("School of Education", "College of Natural Sciences"),
-    ("College of Natural Sciences", "School of Food Technology, Nutrition and Bioengineering"),
-    ("School of Food Technology, Nutrition and Bioengineering", "School of Agricultural Sciences"),
-    ("School of Agricultural Sciences", "School of Veterinary Medicine"),
-    ("School of Statistics and Planning", "School of Economics"),
-    ("School of Economics", "School of Law"),
+    ("Main Building", "Freedom Square", 3),
+    ("Main Building", "Main Library", 2),
+    ("Main Building", "School of Social Sciences", 4),
+    ("Main Building", "School of Liberal and Performing Arts", 6),
+    ("Freedom Square", "Main Library", 2),
+    ("Freedom Square", "School of Law", 5),
+    ("Freedom Square", "Central Teaching Facility", 4),
+    ("Main Library", "School of Education", 5),
+    ("Main Library", "School of Economics", 7),
+    ("Central Teaching Facility", "CoCIS", 3),
+    ("Central Teaching Facility", "School of Statistics and Planning", 2),
+    ("CoCIS", "School of Statistics and Planning", 2),
+    ("CoCIS", "School of Engineering", 4),
+    ("School of Engineering", "School of the Built Environment", 2),
+    ("School of Engineering", "Margaret Trowell School of Industrial and Fine Art", 5),
+    ("School of the Built Environment", "Margaret Trowell School of Industrial and Fine Art", 3),
+    ("Margaret Trowell School of Industrial and Fine Art", "School of Liberal and Performing Arts", 8),
+    ("School of Education", "School of Social Sciences", 3),
+    ("School of Education", "College of Natural Sciences", 6),
+    ("College of Natural Sciences", "School of Food Technology, Nutrition and Bioengineering", 4),
+    ("School of Food Technology, Nutrition and Bioengineering", "School of Agricultural Sciences", 5),
+    ("School of Agricultural Sciences", "School of Veterinary Medicine", 6),
+    ("School of Statistics and Planning", "School of Economics", 6),
+    ("School of Economics", "School of Law", 3),
 ]
 
 MAX_EXPANSIONS = 10_000  # safety cap so tree-like search always terminates
 
 
 def build_graph(edges):
-    """Return an adjacency list {place: [neighbours sorted alphabetically]}.
+    """Return (adjacency list, costs).
 
-    Connections are two-way, so each edge is added in both directions.
-    Sorting here means every caller sees neighbours in alphabetical order.
+    adjacency: {place: [neighbours sorted alphabetically]}
+    costs:     {(a, b): cost} with both directions stored, because
+               connections are two-way.
     """
     graph = {}
-    for a, b in edges:
+    costs = {}
+    for a, b, cost in edges:
+        if cost <= 0:
+            raise ValueError(f"Edge {a!r} - {b!r} must have a positive cost")
         graph.setdefault(a, set()).add(b)
         graph.setdefault(b, set()).add(a)
-    return {place: sorted(neighbours, key=str.lower) for place, neighbours in graph.items()}
+        costs[(a, b)] = cost
+        costs[(b, a)] = cost
+    adjacency = {p: sorted(n, key=str.lower) for p, n in graph.items()}
+    return adjacency, costs
 
 
-GRAPH = build_graph(EDGES)
+GRAPH, COSTS = build_graph(EDGES)
 PLACES = sorted(GRAPH, key=str.lower)
-
 
 # ---------------------------------------------------------------------------
 # Problem formulation
@@ -83,10 +104,11 @@ PLACES = sorted(GRAPH, key=str.lower)
 class RouteProblem:
     """The five components of the search problem."""
 
-    def __init__(self, initial, goal, graph=GRAPH):
+    def __init__(self, initial, goal, graph=GRAPH, costs=COSTS):
         self.initial = initial          # 1. initial state
         self.goal = goal
         self.graph = graph
+        self.costs = costs
 
     def actions(self, state):
         """2. Actions(s): walk to any directly connected place (alphabetical)."""
@@ -101,8 +123,8 @@ class RouteProblem:
         return state == self.goal
 
     def action_cost(self, state, action, next_state):
-        """5. Step cost: every hop costs exactly 1."""
-        return 1
+        """5. Step cost: the cost attached to the connection."""
+        return self.costs[(state, next_state)]
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +162,13 @@ def solution(node):
 
 
 # ---------------------------------------------------------------------------
-# Frontiers: the only thing that differs between BFS and DFS
+# Frontiers: the only thing that differs between BFS, DFS and UCS
 # ---------------------------------------------------------------------------
 
 class FIFOFrontier:
     """Queue: add at the back, remove from the front (BFS)."""
+
+    reopens = False  # a state is never worth re-reaching in BFS
 
     def __init__(self):
         self.items = deque()
@@ -163,6 +187,8 @@ class FIFOFrontier:
 class LIFOFrontier:
     """Stack: add at the back, remove from the back (DFS)."""
 
+    reopens = False
+
     def __init__(self):
         self.items = []
 
@@ -178,7 +204,35 @@ class LIFOFrontier:
         return len(self.items)
 
 
-STRATEGIES = {"BFS": FIFOFrontier, "DFS": LIFOFrontier}
+class PriorityFrontier:
+    """Priority queue ordered by path cost (UCS).
+
+    Ties are broken alphabetically by state name, then by insertion order,
+    so results are deterministic.
+    """
+
+    # UCS must be allowed to re-reach a state if the new path is cheaper.
+    reopens = True
+
+    def __init__(self):
+        self.heap = []
+        self.counter = itertools.count()
+
+    def add_children(self, children):
+        for child in children:
+            heapq.heappush(
+                self.heap,
+                (child.path_cost, child.state.lower(), next(self.counter), child),
+            )
+
+    def pop(self):
+        return heapq.heappop(self.heap)[-1]
+
+    def __len__(self):
+        return len(self.heap)
+
+
+STRATEGIES = {"BFS": FIFOFrontier, "DFS": LIFOFrontier, "UCS": PriorityFrontier}
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +253,10 @@ class SearchResult:
     def cost(self):
         return self.node.path_cost if self.node else None
 
+    @property
+    def hops(self):
+        return len(self.route) - 1 if self.node else None
+
 
 def search(problem, frontier_class, use_reached=True, max_expansions=MAX_EXPANSIONS):
     """Generic search; the strategy is chosen only by `frontier_class`.
@@ -207,9 +265,12 @@ def search(problem, frontier_class, use_reached=True, max_expansions=MAX_EXPANSI
     2. Put it on the frontier (and in reached, if graph search).
     3. Loop: if the frontier is empty, return failure.
     4. Remove a node; if it passes the goal test, return it.
+       (The goal test happens on removal, not generation. This is what
+       makes UCS return the cheapest route.)
     5. Otherwise expand it (count it as expanded).
     6. For each child: in graph search skip it if its state is already
-       in reached, else record it in reached.
+       in reached, unless the strategy re-opens states and this path is
+       strictly cheaper; otherwise record it in reached.
     7. Add the surviving children to the frontier and repeat.
 
     With use_reached=False this is tree-like search: repeated states are
@@ -223,6 +284,9 @@ def search(problem, frontier_class, use_reached=True, max_expansions=MAX_EXPANSI
 
     while len(frontier) > 0:                                       # step 3
         node = frontier.pop()                                      # step 4
+        if use_reached and frontier_class.reopens \
+                and node.path_cost > reached[node.state].path_cost:
+            continue  # stale entry: a cheaper path to this state was found later
         if problem.is_goal(node.state):
             return SearchResult(node, expanded)
         if expanded >= max_expansions:
@@ -231,7 +295,10 @@ def search(problem, frontier_class, use_reached=True, max_expansions=MAX_EXPANSI
         children = []
         for child in expand(problem, node):
             if use_reached:                                        # step 6
-                if child.state in reached:
+                seen = reached.get(child.state)
+                if seen is not None and not (
+                    frontier_class.reopens and child.path_cost < seen.path_cost
+                ):
                     continue
                 reached[child.state] = child
             children.append(child)
@@ -278,8 +345,16 @@ def format_result(algorithm, result):
         else:
             lines.append("No route found")
     else:
-        lines.append("Route: " + " -> ".join(result.route))
-        lines.append(f"Cost (hops): {result.cost}")
+        route = result.route
+        lines.append("Route: " + " -> ".join(route))
+        lines.append(f"Cost (hops): {result.hops}")
+        if algorithm == "UCS":
+            # Show the cost of each leg so the total can be checked by eye.
+            legs = [f"{a} -> {b}: {COSTS[(a, b)]}" for a, b in zip(route, route[1:])]
+            if legs:
+                lines.append("Leg costs:")
+                lines.extend(f"  {leg}" for leg in legs)
+            lines.append(f"Total cost (min): {result.cost}")
     lines.append(f"Nodes expanded: {result.expanded}")
     return "\n".join(lines)
 
@@ -296,18 +371,18 @@ def prompt_place(label):
 
 def prompt_algorithm():
     while True:
-        text = input("Algorithm (BFS or DFS): ")
+        text = input("Algorithm (BFS, DFS or UCS): ")
         algo = match_algorithm(text)
         if algo:
             return algo
-        print(f"Unknown algorithm: {text.strip()!r}. Please enter BFS or DFS.")
+        print(f"Unknown algorithm: {text.strip()!r}. Please enter BFS, DFS or UCS.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Makerere Campus Route Finder (BFS/DFS)")
+    parser = argparse.ArgumentParser(description="Makerere Campus Route Finder (BFS/DFS/UCS)")
     parser.add_argument("-s", "--source", help="source place")
     parser.add_argument("-d", "--destination", help="destination place")
-    parser.add_argument("-a", "--algorithm", help="BFS or DFS")
+    parser.add_argument("-a", "--algorithm", help="BFS, DFS or UCS")
     parser.add_argument("--no-reached", action="store_true",
                         help="turn the reached table off (tree-like search)")
     args = parser.parse_args()
@@ -335,7 +410,7 @@ def main():
 
         algorithm = match_algorithm(args.algorithm) if args.algorithm else None
         if args.algorithm and not algorithm:
-            print(f"Unknown algorithm: {args.algorithm.strip()!r}. Please enter BFS or DFS.")
+            print(f"Unknown algorithm: {args.algorithm.strip()!r}. Please enter BFS, DFS or UCS.")
         algorithm = algorithm or prompt_algorithm()
     except (EOFError, KeyboardInterrupt):
         print("\nExiting.")
