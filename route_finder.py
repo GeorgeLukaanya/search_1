@@ -1,6 +1,6 @@
 """
 CSC 2114 Artificial Intelligence - Practical 1
-Makerere Campus Route Finder (BFS, DFS and UCS)
+Makerere Campus Route Finder (BFS, DFS, UCS, Greedy Best-First and A*)
 
 Group 10 (BSSE)
     1. NOMWESIGWA KEITH     23/U/16071/EVE
@@ -17,8 +17,16 @@ connection now carries a cost (approximate walking time in minutes).
   DFS - first route found going deep (ignores costs)
   UCS - uniform cost search: always expands the cheapest frontier node,
         so the route it returns has the lowest total cost.
+  GREEDY - greedy best-first search: always expands the node that LOOKS
+        closest to the goal, h(n). Fast, but not guaranteed cheapest.
+  A*  - expands the node with the lowest g(n) + h(n). With our admissible,
+        consistent heuristic it returns the cheapest route, like UCS,
+        but usually expands fewer nodes.
 
-Every result reports the number of hops; UCS also reports the total cost.
+Heuristic: h(n) = (cheapest edge cost) x (fewest hops from n to the goal).
+
+Every result reports the number of hops; UCS, GREEDY and A* also report
+the total cost.
 Python 3 standard library only.
 
 Usage:
@@ -26,6 +34,8 @@ Usage:
     python3 route_finder.py --no-reached    # tree-like search (no reached table)
     python3 route_finder.py -s "School of Law" -d "CoCIS" -a DFS
     python3 route_finder.py -s "School of Law" -d "CoCIS" -a UCS
+    python3 route_finder.py -s "School of Law" -d "CoCIS" -a GREEDY
+    python3 route_finder.py -s "School of Law" -d "CoCIS" -a "A*"
 """
 
 import argparse
@@ -109,6 +119,8 @@ class RouteProblem:
         self.goal = goal
         self.graph = graph
         self.costs = costs
+        self.min_cost = min(costs.values())
+        self.hops_to_goal = hop_distances(graph, goal)
 
     def actions(self, state):
         """2. Actions(s): walk to any directly connected place (alphabetical)."""
@@ -125,6 +137,31 @@ class RouteProblem:
     def action_cost(self, state, action, next_state):
         """5. Step cost: the cost attached to the connection."""
         return self.costs[(state, next_state)]
+
+    def h(self, state):
+        """Heuristic: estimated cost from `state` to the goal.
+
+        h(n) = (cheapest edge cost) x (fewest hops from n to the goal).
+        Any route from n needs at least that many hops, and each hop costs
+        at least the cheapest edge, so h never overestimates (admissible).
+        Neighbours differ by at most one hop and every edge costs at least
+        the cheapest edge, so h(n) <= c(n, n') + h(n') (consistent).
+        """
+        hops = self.hops_to_goal.get(state)
+        return float("inf") if hops is None else self.min_cost * hops
+
+
+def hop_distances(graph, goal):
+    """Fewest hops from every place to `goal` (a BFS outward from the goal)."""
+    dist = {goal: 0}
+    queue = deque([goal])
+    while queue:
+        place = queue.popleft()
+        for neighbour in graph[place]:
+            if neighbour not in dist:
+                dist[neighbour] = dist[place] + 1
+                queue.append(neighbour)
+    return dist
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +199,7 @@ def solution(node):
 
 
 # ---------------------------------------------------------------------------
-# Frontiers: the only thing that differs between BFS, DFS and UCS
+# Frontiers: the only thing that differs between the five algorithms
 # ---------------------------------------------------------------------------
 
 class FIFOFrontier:
@@ -170,7 +207,7 @@ class FIFOFrontier:
 
     reopens = False  # a state is never worth re-reaching in BFS
 
-    def __init__(self):
+    def __init__(self, problem=None):
         self.items = deque()
 
     def add_children(self, children):
@@ -189,7 +226,7 @@ class LIFOFrontier:
 
     reopens = False
 
-    def __init__(self):
+    def __init__(self, problem=None):
         self.items = []
 
     def add_children(self, children):
@@ -214,15 +251,20 @@ class PriorityFrontier:
     # UCS must be allowed to re-reach a state if the new path is cheaper.
     reopens = True
 
-    def __init__(self):
+    def __init__(self, problem=None):
+        self.problem = problem
         self.heap = []
         self.counter = itertools.count()
+
+    def priority(self, node):
+        """UCS orders by g(n), the path cost so far."""
+        return node.path_cost
 
     def add_children(self, children):
         for child in children:
             heapq.heappush(
                 self.heap,
-                (child.path_cost, child.state.lower(), next(self.counter), child),
+                (self.priority(child), child.state.lower(), next(self.counter), child),
             )
 
     def pop(self):
@@ -232,7 +274,29 @@ class PriorityFrontier:
         return len(self.heap)
 
 
-STRATEGIES = {"BFS": FIFOFrontier, "DFS": LIFOFrontier, "UCS": PriorityFrontier}
+class GreedyFrontier(PriorityFrontier):
+    """Priority queue ordered by h(n) only (Greedy Best-First Search)."""
+
+    def priority(self, node):
+        return self.problem.h(node.state)
+
+
+class AStarFrontier(PriorityFrontier):
+    """Priority queue ordered by f(n) = g(n) + h(n) (A* search)."""
+
+    def priority(self, node):
+        return node.path_cost + self.problem.h(node.state)
+
+
+STRATEGIES = {
+    "BFS": FIFOFrontier,
+    "DFS": LIFOFrontier,
+    "UCS": PriorityFrontier,
+    "GREEDY": GreedyFrontier,
+    "A*": AStarFrontier,
+}
+INFORMED = {"GREEDY", "A*"}   # algorithms that use the heuristic
+WEIGHTED = {"UCS", "GREEDY", "A*"}   # algorithms whose output shows minutes
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +341,7 @@ def search(problem, frontier_class, use_reached=True, max_expansions=MAX_EXPANSI
     not detected, so the expansion cap is needed to guarantee termination.
     """
     node = Node(problem.initial)                                   # step 1
-    frontier = frontier_class()
+    frontier = frontier_class(problem)
     frontier.add_children([node])                                  # step 2
     reached = {problem.initial: node} if use_reached else None
     expanded = 0
@@ -325,8 +389,16 @@ def match_place(text):
     return _PLACE_LOOKUP.get(text.strip().lower())
 
 
+_ALGORITHM_ALIASES = {
+    "ASTAR": "A*", "A-STAR": "A*", "A STAR": "A*",
+    "GBFS": "GREEDY", "GREEDY BEST-FIRST": "GREEDY", "GREEDY BEST FIRST": "GREEDY",
+}
+ALGORITHM_CHOICES = "BFS, DFS, UCS, GREEDY or A*"
+
+
 def match_algorithm(text):
     algo = text.strip().upper()
+    algo = _ALGORITHM_ALIASES.get(algo, algo)
     return algo if algo in STRATEGIES else None
 
 
@@ -337,7 +409,7 @@ def print_valid_places():
         print(f"  - {p} ({kind})")
 
 
-def format_result(algorithm, result):
+def format_result(algorithm, result, problem=None):
     lines = [f"Algorithm: {algorithm}"]
     if result.node is None:
         if result.hit_cap:
@@ -348,7 +420,9 @@ def format_result(algorithm, result):
         route = result.route
         lines.append("Route: " + " -> ".join(route))
         lines.append(f"Cost (hops): {result.hops}")
-        if algorithm == "UCS":
+        if algorithm in INFORMED and problem is not None:
+            lines.append(f"Heuristic h(source): {problem.h(problem.initial)}")
+        if algorithm in WEIGHTED:
             # Show the cost of each leg so the total can be checked by eye.
             legs = [f"{a} -> {b}: {COSTS[(a, b)]}" for a, b in zip(route, route[1:])]
             if legs:
@@ -371,18 +445,18 @@ def prompt_place(label):
 
 def prompt_algorithm():
     while True:
-        text = input("Algorithm (BFS, DFS or UCS): ")
+        text = input(f"Algorithm ({ALGORITHM_CHOICES}): ")
         algo = match_algorithm(text)
         if algo:
             return algo
-        print(f"Unknown algorithm: {text.strip()!r}. Please enter BFS, DFS or UCS.")
+        print(f"Unknown algorithm: {text.strip()!r}. Please enter {ALGORITHM_CHOICES}.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Makerere Campus Route Finder (BFS/DFS/UCS)")
+    parser = argparse.ArgumentParser(description="Makerere Campus Route Finder (BFS/DFS/UCS/GREEDY/A*)")
     parser.add_argument("-s", "--source", help="source place")
     parser.add_argument("-d", "--destination", help="destination place")
-    parser.add_argument("-a", "--algorithm", help="BFS, DFS or UCS")
+    parser.add_argument("-a", "--algorithm", help=ALGORITHM_CHOICES + ' (quote A* in the shell: "A*")')
     parser.add_argument("--no-reached", action="store_true",
                         help="turn the reached table off (tree-like search)")
     args = parser.parse_args()
@@ -410,7 +484,7 @@ def main():
 
         algorithm = match_algorithm(args.algorithm) if args.algorithm else None
         if args.algorithm and not algorithm:
-            print(f"Unknown algorithm: {args.algorithm.strip()!r}. Please enter BFS, DFS or UCS.")
+            print(f"Unknown algorithm: {args.algorithm.strip()!r}. Please enter {ALGORITHM_CHOICES}.")
         algorithm = algorithm or prompt_algorithm()
     except (EOFError, KeyboardInterrupt):
         print("\nExiting.")
@@ -418,7 +492,7 @@ def main():
 
     result = find_route(source, destination, algorithm, use_reached=use_reached)
     print()
-    print(format_result(algorithm, result))
+    print(format_result(algorithm, result, RouteProblem(source, destination)))
 
 
 if __name__ == "__main__":
