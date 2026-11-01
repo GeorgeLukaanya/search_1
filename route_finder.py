@@ -17,7 +17,7 @@ FILE MAP (where to find things)
   Section 3  class Node, expand(), solution(), route_cost()
   Section 4  Frontier classes (FIFO, LIFO, Priority), the KEY FUNCTIONS, STRATEGIES table
   Section 5  search()  <- the ONE generic loop used by BFS, DFS, UCS, GBFS and A*
-  Section 6  ids_search() <- the IDS driver (repeated depth-limited DFS)
+  Section 6  ids_search() <- the IDS driver (the same loop, depth-limited)
   Section 7  check_heuristic()   (--check-heuristic)
   Section 8  format_result()     (output layout)
   Section 9  run_batch()         (--batch  -> results_log.csv)
@@ -37,8 +37,8 @@ Six search strategies share ONE generic search loop (see `search`):
   DFS  - stack (LIFO). First route found going deep. Ignores distances.
   UCS  - priority queue ordered by g(n), the metres already walked.
          Optimal. Re-opens a state if a cheaper path to it is found.
-  IDS  - iterative deepening: repeated depth-limited DFS (own driver,
-         `ids_search`). Fewest hops, uses little memory.
+  IDS  - iterative deepening: a driver (`ids_search`) that reruns the same
+         loop as a depth-limited DFS. Fewest hops, uses little memory.
   GBFS - priority queue ordered by h(n), the ESTIMATED metres still to go.
          Fast but not guaranteed cheapest. Never replaces a state.
   A*   - priority queue ordered by f(n) = g(n) + h(n). Optimal here because
@@ -173,13 +173,11 @@ ALGORITHM_ORDER = ["BFS", "DFS", "UCS", "IDS", "GBFS", "A*"]
 
 # ---------------------------------------------------------------------------
 # Message wording. The first two are given word for word in the assignment.
-# The last two are not spelled out in the assignment text; they live here,
+# The last one is not spelled out in the assignment text; it lives here,
 # in one place, so they can be matched to the Assignment 3 wording instantly.
 # ---------------------------------------------------------------------------
 CAP_MESSAGE = f"Search stopped: expansion cap ({MAX_EXPANSIONS}) reached."   # given
 NO_ROUTE_MESSAGE = "No route found."                                         # given
-SAME_PLACE_MESSAGE = ("Source and destination are the same place. "
-                      "Please choose a different destination.")
 IDS_EXTRA_LINE = "Final depth limit: {limit}"   # extra output line printed for IDS
 
 
@@ -445,7 +443,7 @@ class SearchResult:
     """Everything a search reports back."""
 
     def __init__(self, graph, node, expanded, hit_cap=False, max_frontier=0,
-                 reopened=0, limits=None):
+                 reopened=0, limits=None, cutoff=False):
         self.graph = graph
         self.node = node                # goal node, or None if no route
         self.expanded = expanded        # removed from frontier, not goal, children generated
@@ -453,6 +451,7 @@ class SearchResult:
         self.max_frontier = max_frontier    # largest frontier size seen
         self.reopened = reopened        # re-reached an already-expanded state with lower g
         self.limits = limits or []      # IDS only: [(limit, expanded, outcome), ...]
+        self.cutoff = cutoff            # depth-limited runs: a node was cut at the limit
 
     @property
     def route(self):
@@ -468,7 +467,8 @@ class SearchResult:
 
 
 def search(graph, source, goal, strategy, coordinates=None,
-           use_reached=True, trace=False, max_expansions=MAX_EXPANSIONS):
+           use_reached=True, trace=False, max_expansions=MAX_EXPANSIONS,
+           depth_limit=None, cycle_check=False):
     """THE one search loop. The strategy only supplies the frontier and the
     reached rule; there is no `if algorithm == ...` inside this function.
 
@@ -492,6 +492,12 @@ def search(graph, source, goal, strategy, coordinates=None,
     With use_reached=False (tree-like mode) there is no reached table:
     nothing is discarded, cycles are not detected, so the cap is what makes
     the search stop.
+
+    IDS reuses this same loop (see `ids_search`) with two extra switches:
+      depth_limit - a node at this depth is goal-tested but NOT expanded and
+                    not counted; it sets `cutoff` on the result.
+      cycle_check - a child is not generated if its place is already on the
+                    path from the root to its parent.
     """
     frontier = strategy.make_frontier(goal, coordinates, trace)
     root = Node(source)
@@ -501,6 +507,7 @@ def search(graph, source, goal, strategy, coordinates=None,
     expanded = 0
     reopened = 0
     max_frontier = len(frontier)
+    cutoff = False               # depth-limited runs: some node was cut at the limit
 
     while len(frontier) > 0:                                        # step 2
         node = frontier.pop()                                       # step 3
@@ -513,8 +520,12 @@ def search(graph, source, goal, strategy, coordinates=None,
             continue
 
         if is_goal(node.state, goal):                               # 3b
-            return SearchResult(graph, node, expanded,
-                                max_frontier=max_frontier, reopened=reopened)
+            return SearchResult(graph, node, expanded, max_frontier=max_frontier,
+                                reopened=reopened, cutoff=cutoff)
+
+        if depth_limit is not None and node.depth == depth_limit:  # IDS limit
+            cutoff = True                                           # not expanded
+            continue
 
         if expanded >= max_expansions:                              # 3c
             return SearchResult(graph, None, expanded, hit_cap=True,
@@ -523,8 +534,11 @@ def search(graph, source, goal, strategy, coordinates=None,
         expanded += 1                                               # step 4
         expanded_states.add(node.state)
 
+        on_path = set(solution(node)) if cycle_check else ()
         accepted = []
         for child in expand(graph, node):                           # step 5
+            if child.state in on_path:                              # IDS cycle check
+                continue
             if reached is not None:
                 seen = reached.get(child.state)
                 if seen is not None:
@@ -544,66 +558,37 @@ def search(graph, source, goal, strategy, coordinates=None,
         max_frontier = max(max_frontier, len(frontier))
 
     return SearchResult(graph, None, expanded,                      # failure
-                        max_frontier=max_frontier, reopened=reopened)
+                        max_frontier=max_frontier, reopened=reopened, cutoff=cutoff)
 
 
 # ===========================================================================
-# 6. ITERATIVE DEEPENING SEARCH (its own driver around a depth-limited DFS)
+# 6. ITERATIVE DEEPENING SEARCH (a driver around the same generic loop)
 # ===========================================================================
-
-def depth_limited_search(graph, source, goal, limit):
-    """Depth-limited DFS with a stack.
-
-    Cycle check: a child is skipped only if its state is already on the path
-    from the root to its parent (no reached table). A node at depth == limit
-    is not expanded (its children are not generated), so it does not count
-    as expanded. Returns (goal_node_or_None, expanded, cutoff, max_stack).
-    """
-    stack = LIFOFrontier()
-    stack.add_children([Node(source)])
-    expanded = 0
-    cutoff = False                      # True if some node was cut at the limit
-    max_stack = len(stack)
-    while len(stack) > 0:
-        node = stack.pop()
-        if is_goal(node.state, goal):                       # goal test on removal
-            return node, expanded, cutoff, max_stack
-        if node.depth == limit:         # at the limit: do not go deeper
-            cutoff = True
-            continue
-        expanded += 1
-        on_path = set(solution(node))   # places on the root -> node path
-        children = [c for c in expand(graph, node) if c.state not in on_path]
-        stack.add_children(children)    # reversed inside -> alphabetical first
-        max_stack = max(max_stack, len(stack))
-    return None, expanded, cutoff, max_stack
-
 
 def ids_search(graph, source, goal):
     """IDS driver: depth limits 0, 1, 2, ... until the goal is found.
 
-    Expansions are summed over ALL iterations. The driver stops with
-    "no route" after a pass in which nothing was cut off (the whole space
-    within reach has been searched).
+    Each iteration is the generic `search` loop with a stack (the DFS
+    strategy), the reached table OFF, the cycle check ON and a depth limit;
+    the driver does not duplicate the loop. Expansions are summed over ALL
+    iterations. It stops with "no route" after an iteration in which nothing
+    was cut off (the whole reachable space was searched); the limit never
+    exceeds the number of places minus one.
     """
     total_expanded = 0
     max_stack = 1
     limits = []
-    limit = 0
-    while True:
-        node, expanded, cutoff, stack_peak = depth_limited_search(
-            graph, source, goal, limit)
-        total_expanded += expanded
-        max_stack = max(max_stack, stack_peak)
-        outcome = "goal found" if node else ("cutoff" if cutoff else "exhausted")
-        limits.append((limit, expanded, outcome))
-        if node is not None:
-            return SearchResult(graph, node, total_expanded,
-                                max_frontier=max_stack, limits=limits)
-        if not cutoff:
-            return SearchResult(graph, None, total_expanded,
-                                max_frontier=max_stack, limits=limits)
-        limit += 1
+    for limit in range(len(graph)):                 # 0 .. places - 1
+        r = search(graph, source, goal, STRATEGIES["DFS"], use_reached=False,
+                   depth_limit=limit, cycle_check=True)
+        total_expanded += r.expanded
+        max_stack = max(max_stack, r.max_frontier)
+        outcome = "goal found" if r.node else ("cutoff" if r.cutoff else "exhausted")
+        limits.append((limit, r.expanded, outcome))
+        if r.node is not None or not r.cutoff:
+            break
+    return SearchResult(graph, r.node, total_expanded,
+                        max_frontier=max_stack, limits=limits)
 
 
 def run_algorithm(name, graph, source, goal, coordinates,
@@ -903,10 +888,9 @@ def main():
         if args.destination and not destination:
             print(f"Unknown place: {args.destination.strip()!r}")
             print_valid_places()
+        # Source equal to destination is allowed: every algorithm returns a
+        # one-place route with cost 0, hops 0 and 0 nodes expanded.
         destination = destination or prompt_place("Destination")
-        while destination == source:
-            print(SAME_PLACE_MESSAGE)
-            destination = prompt_place("Destination")
 
         algorithm = match_algorithm(args.algorithm) if args.algorithm else None
         if args.algorithm and not algorithm:

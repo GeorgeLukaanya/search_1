@@ -4,7 +4,8 @@ CSC 2114 Artificial Intelligence, Assignment 4, Group 10 (BSSE)
 
 The program finds a walking route across the Makerere campus with six
 strategies: BFS, DFS, UCS, IDS, GBFS and A*. Five of them share one search
-loop (`search()`); IDS has its own driver (`ids_search()`). The file is split
+loop (`search()`); IDS is a driver (`ids_search()`) that reruns that same
+loop with a depth limit. The file is split
 into 11 numbered sections, listed in its opening docstring.
 
 ## 1. Campus data (Section 1)
@@ -104,12 +105,16 @@ coordinates).
 
 ## 6. Iterative deepening (Section 6)
 
-`ids_search()` runs `depth_limited_search()` with limits 0, 1, 2, … until it
-finds the goal.
+`ids_search()` calls the generic `search()` with limits 0, 1, 2, … until it
+finds the goal. It doesn't have a loop of its own; `search()` takes two extra
+switches for it:
 
-- Each pass is a DFS with a stack. There's no `reached` table; a child is
-  skipped only if its place is already on the path from the source.
-- A node at the depth limit is not expanded.
+- **`depth_limit`**: a node at this depth is goal-tested but not expanded or
+  counted, and the run is marked as *cut off*.
+- **`cycle_check`**: a child is skipped if its place is already on the path
+  from the source. There's no `reached` table in IDS.
+
+Each pass uses the DFS stack frontier. The limit never goes above 17 (places − 1).
 - Expansions are summed over **all** passes, which is why IDS counts are high
   (324 on problem 4).
 - If a pass finishes without cutting anything off, there is no route.
@@ -180,5 +185,6 @@ pop School of Statistics and Planning key=770      ← goal
   algorithm.
   - Names are case-insensitive and trimmed.
   - Unknown names ask again.
-  - A destination equal to the source is rejected.
+  - A destination equal to the source gives a one-place route: cost 0, hops 0,
+    0 nodes expanded.
   - `ALL` runs the six algorithms in order, one block each.

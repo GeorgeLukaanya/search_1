@@ -95,8 +95,8 @@ python3 route_finder.py --scan
   are ignored. Type the full place name.
 - An unknown place prints the list of valid places and asks again. An unknown
   algorithm asks again.
-- If the destination equals the source, the program says so and asks for a
-  different destination.
+- If the destination equals the source, every algorithm prints a one-place
+  route with cost 0, hops 0 and 0 nodes expanded.
 - If no route exists, the program prints `No route found.`. In tree-like mode
   the cap prints `Search stopped: expansion cap (10000) reached.`
 
@@ -115,8 +115,9 @@ python3 route_finder.py --scan
   and A* replace it when a strictly cheaper path appears, and silently drop
   the older, now stale entry when it is popped (not counted as expanded).
 - **Goal test** happens when a node is removed from the frontier.
-- **`ids_search()`** is its own driver: repeated depth-limited DFS that skips
-  places already on the current path, summing expansions over all limits.
+- **`ids_search()`** is a driver over the same `search()` loop: it reruns it
+  with the stack frontier, reached off, a path cycle check and depth limits
+  0, 1, 2, … (at most places − 1), summing expansions over all limits.
 - **Nodes expanded** counts nodes removed from the frontier that are not the
   goal and have their children generated.
 - Search functions receive the graph, coordinates and goal as arguments; they
