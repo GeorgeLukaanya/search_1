@@ -1,219 +1,184 @@
 # How `route_finder.py` Works
 
-CSC 2114 Artificial Intelligence, Group 10 (BSSE)
+CSC 2114 Artificial Intelligence, Assignment 4, Group 10 (BSSE)
 
-All five algorithms (BFS, DFS, UCS, Greedy Best-First and A*) run through the
-same search function.
-The only thing that changes is which node gets picked next.
+The program finds a walking route across the Makerere campus with six
+strategies: BFS, DFS, UCS, IDS, GBFS and A*. Five of them share one search
+loop (`search()`); IDS has its own driver (`ids_search()`). The file is split
+into 11 numbered sections, listed in its opening docstring.
 
-## 1. The campus map
+## 1. Campus data (Section 1)
 
-- **`EDGES`** lists every connection as `(place A, place B, minutes)`, for example
-  `("Main Building", "Freedom Square", 3)`. The minutes are illustrative walking
-  times, not measured ones.
-- **`build_graph()`** turns that list into two dictionaries:
-  - **`GRAPH`** maps each place to its neighbours, sorted alphabetically. Every
-    edge is stored both ways, because paths are two-way.
-  - **`COSTS`** maps a pair like `("School of Law", "School of Economics")` to its
-    cost, `3`. Both directions are stored.
-- **`MAX_EXPANSIONS = 10_000`** is the safety limit for tree-like search.
+- **`WEIGHTED_EDGES`** lists the 24 connections as `(place A, place B, metres)`,
+  copied unchanged from the assignment, for example
+  `("Main Building", "Freedom Square", 120)`.
+- **`COORDINATES`** gives every place an `(x, y)` map position in metres. Only
+  the heuristic uses it.
+- **`REQUIRED_PROBLEMS`** holds the ten (source, destination) pairs for `--batch`.
+- **`build_graph()`** turns the edges into `{place: {neighbour: weight}}`, both
+  directions, with neighbours in alphabetical order. That ordering is the
+  tie-break every strategy relies on.
+- **`MAX_EXPANSIONS = 10_000`** stops tree-like search. **`H_SCALE_PERCENT = 100`**
+  scales the heuristic (Part C3 changes it; the submitted file keeps 100).
 
-## 2. The problem definition (`RouteProblem`)
+## 2. The heuristic (Section 2)
 
-These are the five parts of a search problem from the lecture:
+```python
+h(place, goal) = isqrt((x1 - x2)**2 + (y1 - y2)**2) * H_SCALE_PERCENT // 100
+```
 
-| Part | Code | Meaning |
+- The straight-line distance on the map, rounded **down** to whole metres, so
+  every machine gets the same integers and ties are real ties.
+- It depends on the goal: h(Law, Law) = 0, but h(Law, Veterinary Medicine) = 1184.
+  It is computed per query; no fixed table could work.
+- **Admissible:** every edge is at least as long as the straight line between
+  its ends, so a real route can never be shorter than h.
+- **Consistent:** by the triangle inequality, h(u) ≤ weight(u, v) + h(v) on
+  every edge. This is why A* never needs to reopen a place (the scan reports 0).
+
+## 3. Search-tree pieces (Section 3)
+
+- **`Node`**: `state` (the place), `parent`, `action`, `path_cost` (g, metres
+  walked so far) and `depth` (hops from the source, used by IDS).
+- **`expand(graph, node)`** makes one child per neighbour, alphabetically. Each
+  child's g is the parent's g plus the edge weight.
+- **`solution(node)`** follows `parent` links back to the source and reverses
+  them to give the route.
+- **`route_cost(graph, route)`** adds up a route's edge weights. The printed
+  cost comes from here, so BFS/DFS/IDS still report metres even though they
+  never look at weights while searching.
+
+## 4. Frontiers and key functions (Section 4)
+
+| Frontier | Used by | Removes |
 |---|---|---|
-| Initial state | `self.initial` | Where you start |
-| Actions | `actions(s)` | The neighbours of `s`, in alphabetical order |
-| Transition | `result(s, a)` | Walking to place X puts you at X |
-| Goal test | `is_goal(s)` | Are we at the destination? |
-| Step cost | `action_cost(...)` | The edge's minutes, from `COSTS` |
+| `FIFOFrontier` | BFS | The oldest node (queue) |
+| `LIFOFrontier` | DFS, IDS | The newest node (stack). Children are pushed in reverse so the alphabetically first is explored first |
+| `PriorityFrontier` | UCS, GBFS, A* | The node with the smallest `(key, name, counter)` |
 
-`RouteProblem` also has a sixth method, used only by Greedy and A*:
+`PriorityFrontier` is shared by three strategies. The **key function** is the
+only difference between them:
 
-- **`h(state)`**, the heuristic: an estimate of the minutes left from `state` to
-  the goal.
-
-  ```
-  h(n) = 2 × (fewest hops from n to the goal)
-  ```
-
-  - 2 is the cheapest edge on the map (`min_cost`).
-  - The hop counts come from `hop_distances()`, a BFS run once outward from the
-    goal when the problem is created.
-  - **Admissible:** any route from n needs at least that many hops, and each
-    costs at least 2, so h never overestimates.
-  - **Consistent:** neighbours differ by at most one hop and every edge costs at
-    least 2, so h(n) ≤ c(n, n′) + h(n′).
-
-## 3. Search tree pieces
-
-- **`Node`** has the four lecture fields:
-  - `state`: the place
-  - `parent`: the node it came from
-  - `action`: the place walked to
-  - `path_cost`: total minutes so far
-- **`expand(problem, node)`** creates one child node per neighbour. Each child's
-  cost is the parent's cost plus the edge cost.
-- **`solution(node)`** follows the `parent` links back to the start, then reverses
-  the list to give the route.
-
-**State vs node:** a state is just a place. A node is a place plus how you got
-there. The same place can appear in several nodes with different costs.
-
-## 4. The frontiers
-
-This is the only part that differs between the algorithms:
-
-| Class | Algorithm | Picks next |
+| Strategy | Key | Looks at |
 |---|---|---|
-| `FIFOFrontier` | BFS | The oldest node (queue): shallowest first |
-| `LIFOFrontier` | DFS | The newest node (stack): deepest first |
-| `PriorityFrontier` | UCS | The cheapest node so far: lowest g(n) |
-| `GreedyFrontier` | Greedy | The node that looks closest to the goal: lowest h(n) |
-| `AStarFrontier` | A* | The best estimated total: lowest f(n) = g(n) + h(n) |
+| UCS | `ucs_key` = g(n) | Cost already paid |
+| GBFS | `make_gbfs_key` = h(n) | Estimated cost still to go (never reads g) |
+| A* | `make_astar_key` = g(n) + h(n) | Both |
 
-`GreedyFrontier` and `AStarFrontier` are subclasses of `PriorityFrontier`. They
-override only `priority(node)`, which returns the number the heap is ordered by.
-Every frontier receives the problem when it is created, so the informed ones
-can call `problem.h()`.
+Ties go to the alphabetically first place, then the earliest inserted node
+(a counter from `itertools.count()`).
 
-- **DFS ordering.** DFS pushes children in reverse alphabetical order. That leaves
-  the alphabetically first neighbour on top of the stack, so it is explored first.
-- **UCS ties.** UCS stores each node as `(cost, name, counter, node)`, so equal
-  costs are broken alphabetically, then by insertion order. The results are
-  always the same.
-- **`reopens`.** Each frontier has this flag. UCS, Greedy and A* set it to `True`, meaning
-  "I may come back to a place if I find a cheaper way there."
+A **`Strategy`** bundles a frontier with a **reached rule** (`reopens`):
 
-`STRATEGIES` maps the name the user types (`BFS`, `DFS`, `UCS`, `GREEDY` or
-`A*`) to its frontier class. `ASTAR`, `A-STAR` and `GBFS` are accepted as
-aliases.
+- `False` (BFS, DFS, GBFS): a child is kept only if its place is not yet in
+  `reached`. A place is never replaced.
+- `True` (UCS, A*): a child is also kept if it reaches a known place with a
+  strictly lower g. It replaces the old record, and the old node becomes stale.
 
-## 5. The search loop (`search()`)
+`STRATEGIES` maps each name to its `Strategy`.
 
-This follows the lecture's seven steps:
+## 5. The generic search loop (Section 5)
 
-1. Make a root node for the start place.
-2. Put it on the frontier and in `reached`.
-3. While the frontier isn't empty:
-4. Remove a node. If it's the goal, return it. **The goal test happens on
-   removal, not when the node is created.**
-5. Otherwise count it as expanded.
-6. For each child, skip it if its place is already in `reached`. UCS, Greedy
-   and A* make one exception: it keeps the child if this path is strictly cheaper.
-7. Add the surviving children to the frontier.
+`search(graph, source, goal, strategy, coordinates, ...)` has no
+`if algorithm == ...` branches:
 
-The priority-queue algorithms (UCS, Greedy, A*) need two extra checks:
+1. Put the root node on the frontier and in `reached`.
+2. If the frontier is empty, fail with `No route found.`
+3. Remove a node.
+   - **Stale rule (UCS, A*):** if its g is higher than the g stored in
+     `reached` for its place, a cheaper path was found later. Discard it; it
+     is not counted as expanded.
+   - **Goal test on removal**, not when generated. This is what makes UCS and
+     A* return the cheapest route.
+   - **Cap:** stop after 10,000 expansions.
+4. Expand it (count +1) and generate its children alphabetically.
+5. Apply the strategy's reached rule to each child.
+6. Add the kept children to the frontier and repeat.
 
-- **When adding children:** keep a child if it's a cheaper way to a place already
-  in `reached`, and record it as the new best.
-- **When removing a node:** if the node costs more than the best known path to its
-  place, it's an outdated entry, so skip it.
+With `--no-reached` there is no `reached` table: nothing is discarded, cycles
+aren't detected, and the cap is what ends a runaway search.
 
-`use_reached=False` (the `--no-reached` flag) turns the `reached` table off,
-which gives tree-like search. The 10,000-expansion limit stops it from running
-forever around cycles.
+The search receives the graph, coordinates and goal as **arguments**; it never
+reads the module-level dictionaries (the marking runs it on modified
+coordinates).
 
-```
-function SEARCH(problem, Frontier, use_reached):
-    1. node ← Node(problem.initial)
-    2. frontier ← Frontier containing node
-       reached ← {problem.initial: node}          (only if use_reached)
-       expanded ← 0
-    3. while frontier is not empty:
-    4.     node ← frontier.POP()                  (FIFO, LIFO, or lowest g / h / g+h)
-           if priority frontier and node.path_cost > reached[node.state].path_cost: skip it (outdated)
-           if problem.IS-GOAL(node.state): return node, expanded
-           if expanded = 10,000: return failure (cap reached)
-    5.     expanded ← expanded + 1
-    6.     for each child in EXPAND(node), in alphabetical order:
-               if use_reached:
-                   if child.state in reached and not (priority frontier and child is strictly cheaper):
-                       skip this child
-                   reached[child.state] ← child
-    7.     frontier.ADD(remaining children)
-    return failure                                (prints "No route found")
-```
+## 6. Iterative deepening (Section 6)
 
-## 6. Worked example: UCS from School of Law to CoCIS
+`ids_search()` runs `depth_limited_search()` with limits 0, 1, 2, … until it
+finds the goal.
 
-This is the order in which UCS removes nodes from the frontier (`g` is minutes
-so far):
+- Each pass is a DFS with a stack. There's no `reached` table; a child is
+  skipped only if its place is already on the path from the source.
+- A node at the depth limit is not expanded.
+- Expansions are summed over **all** passes, which is why IDS counts are high
+  (324 on problem 4).
+- If a pass finishes without cutting anything off, there is no route.
+
+`run_algorithm()` is the one place that picks between `ids_search` and the
+generic `search`.
+
+## 7. Worked example: A* vs GBFS, Social Sciences → Statistics and Planning
+
+A* trace (`--trace`), key = g + h:
 
 ```
-pop School of Law                     (g=0)
-pop School of Economics               (g=3)
-pop Freedom Square                    (g=5)
-pop Main Library                      (g=7)   ← reached via Freedom Square (5+2)
-pop Main Building                     (g=8)
-pop Central Teaching Facility         (g=9)
-pop School of Statistics and Planning (g=9)
-pop Main Library                      (g=10)  ← outdated copy via Economics (3+7), skipped
-pop CoCIS                             (g=11)  ← goal
+pop School of Social Sciences key=605
+push Main Building g=200 h=421 key=621
+push School of Education g=140 h=581 key=721
+pop Main Building key=621
+push Freedom Square g=320 h=358 key=678
+push Main Library g=350 h=436 key=786
+pop Freedom Square key=678
+push Central Teaching Facility g=540 h=180 key=720
+pop Central Teaching Facility key=720
+push CoCIS g=670 h=87 key=757
+push School of Statistics and Planning g=840 h=0 key=840
+pop School of Education key=721
+replace Main Library g=350 -> 300
+pop Main Library key=736
+pop CoCIS key=757
+replace School of Statistics and Planning g=840 -> 770
+pop School of Statistics and Planning key=770      ← goal
 ```
 
-Result: School of Law → School of Economics → School of Statistics and Planning
-→ CoCIS, 3 hops, 11 minutes, 7 nodes expanded.
+(Some pushes are left out.)
 
-- **Re-reaching a place.** Main Library was first reached through Economics at
-  10 minutes. A cheaper way through Freedom Square (7) turned up later. The old
-  copy at 10 still came off the heap, and UCS skipped it.
-- **Why test on removal.** CoCIS was first created through Central Teaching
-  Facility at 12 minutes (9+3). Then it was found through Statistics and Planning
-  at 11 (9+2). Because UCS checks for the goal only when a node is removed, the
-  11-minute path comes off first and wins. Checking when nodes are created would
-  have returned the 12-minute route.
-- **BFS on the same pair** returns School of Law → Freedom Square → Central
-  Teaching Facility → CoCIS. That's also 3 hops but takes 12 minutes, because
-  BFS ignores costs.
+- **Goal test on removal matters.** Statistics and Planning is first generated
+  through Central Teaching Facility at 840 m. That edge is 300 m on foot but
+  only 180 m on the map, so h was misleading. A* doesn't stop there: it finds
+  the 100 m link from CoCIS, replaces the record with g = 770, and pops that
+  node first.
+- **Result:** A* 770 m, 5 hops, 7 expanded. UCS gets the same 770 m but expands
+  11 nodes.
+- **GBFS** looks only at h. It takes the Central Teaching Facility edge
+  straight to the goal: 840 m, 4 hops, 4 expanded. It's faster but 70 m longer,
+  because it never weighs what the path has already cost.
 
-## 7. Worked example: A* vs Greedy, Built Environment to School of Law
+## 8. Checks, output and tools (Sections 7–11)
 
-A* removes nodes in order of f = g + h (abbreviations: SBE = Built Environment,
-ENG = Engineering, MT = Margaret Trowell, SSP = Statistics and Planning,
-CTF = Central Teaching Facility, FS = Freedom Square, ECO = Economics):
-
-```
-pop SBE    g= 0 h=10 f=10
-pop ENG    g= 2 h= 8 f=10
-pop MT     g= 3 h= 8 f=11
-pop CoCIS  g= 6 h= 6 f=12
-pop SSP    g= 8 h= 4 f=12
-pop CTF    g= 9 h= 4 f=13
-pop FS     g=13 h= 2 f=15
-pop ECO    g=14 h= 2 f=16
-pop LAW    g=17 h= 0 f=17   ← goal
-```
-
-A* returns SBE → ENG → CoCIS → SSP → ECO → LAW: 17 minutes, 8 nodes expanded.
-UCS finds the same route but expands 11 nodes.
-
-Greedy looks only at h, so it goes SBE → MT → LPA → MB → FS → LAW. It expands
-just 5 nodes, but the route costs **25 minutes**. Greedy never checks how
-expensive the path so far has been: the long walk from MT to LPA (8 minutes)
-doesn't count against it.
-
-## 8. Results and user interface
-
-- **`SearchResult`** holds the goal node, the expansion count and whether the
-  limit was hit. It also gives `route`, `cost` (minutes) and `hops`.
-- **`find_route()`** is a one-line wrapper: it builds the problem, picks the
-  frontier and runs `search`.
-- **`match_place()`** looks names up ignoring case and leading or trailing
-  spaces.
-- **`format_result()`** prints the output format the brief requires:
+- **`check_heuristic()`** (`--check-heuristic`) tests consistency on 18 goals ×
+  48 directed edges = 864 checks, and admissibility on 306 ordered pairs
+  against UCS costs. Expected: 0 violations each.
+- **`format_result()`** prints:
 
   ```
-  Algorithm: BFS
-  Route: <place 1> -> <place 2> -> ... -> <place n>
-  Cost (hops): <integer>
+  Algorithm: A*
+  Route: <place 1> -> ... -> <place n>
+  Cost (metres): <integer>
+  Hops: <integer>
   Nodes expanded: <integer>
+  Heuristic at source: <integer>     (GBFS and A* only)
   ```
 
-  For UCS, Greedy and A* it also prints the cost of each leg and
-  `Total cost (min)`. Greedy and A* also print `Heuristic h(source)`.
-- **`main()`** reads the command-line options (`-s`, `-d`, `-a`, `--no-reached`)
-  and asks for anything missing. A bad name gives an error and asks again rather
-  than crashing. Ctrl+C or Ctrl+D exits cleanly.
+  IDS adds `Final depth limit: <n>`. `--verbose` adds `Max frontier size`.
+- **`run_batch()`** (`--batch`) runs the ten required problems with all six
+  algorithms and writes `results_log.csv` (60 rows).
+- **`run_scan()`** (`--scan`) compares UCS, A* and GBFS on all 182 ordered
+  school pairs. It prints the summary counts, then every pair where GBFS
+  expanded fewer nodes than A* but returned a costlier route.
+- **`main()`** handles the flags, then asks for source, destination and
+  algorithm.
+  - Names are case-insensitive and trimmed.
+  - Unknown names ask again.
+  - A destination equal to the source is rejected.
+  - `ALL` runs the six algorithms in order, one block each.
